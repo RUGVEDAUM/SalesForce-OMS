@@ -1,0 +1,315 @@
+Plan (what we’ll create)
+	1.	Objects & relationships:
+	•	Standard Account & Contact (use existing).
+	•	Custom objects: Order and Order Item (OrderLine).
+	•	Relationship: Order → Account (lookup), Order Item → Order (master-detail).
+	2.	Fields & page layouts for both objects.
+	3.	Lightning App, Tabs, and record pages for easy demo.
+	4.	Sample records to enter.
+	5.	Automations:
+	•	Auto-number for Order.
+	•	Validation rule (Order must have an Account, Order Items must have Quantity > 0).
+	•	Record-Triggered Flow: When Order Item created/edited, update Order Total (roll-up).
+	•	Record-Triggered Flow: When Order is placed (Status = Confirmed), send email alert to Account owner.
+	•	Path on Order to show stages (Draft → Confirmed → Shipped → Closed).
+	6.	Reports & Dashboard: Orders by Status and Top Accounts by Order Value.
+	7.	Demo script with exact steps and expected outcomes.
+
+⸻
+
+1 — Create custom objects and relationships
+
+Open Setup → Object Manager.
+
+A. Create Order custom object
+	1.	In Object Manager → Create → Custom Object.
+	2.	Label: Order
+Plural Label: Orders
+Object Name (API): Order__c
+Record Name: Order Number (Data Type: Auto Number)
+Display Format: ORD-{0000}
+Starting Number: 1
+	3.	Check Allow Reports, Allow Activities, Track Field History (optional), Add Notes & Attachments if you want.
+	4.	Save.
+
+Add standard fields to Order
+
+In Order object → Fields & Relationships → New:
+	•	Account (Lookup):
+	•	Data Type: Lookup Relationship → Related to Account.
+	•	Field Label: Account → Required on layout (we’ll make validation to enforce too).
+	•	Order Date (Date): default to TODAY? optional.
+	•	Status (Picklist): values: Draft, Confirmed, Shipped, Closed. Default: Draft.
+	•	Order Total (Currency, 2 decimals): default 0. Read-only via page layout or formula? We’ll update via Flow. Set default 0.
+	•	Description (Long Text Area).
+
+Save fields and add to page layout later.
+
+B. Create Order Item custom object (detail)
+	1.	Object Manager → Create → Custom Object.
+	2.	Label: Order Item
+Plural Label: Order Items
+Object Name: Order_Item__c
+Record Name: Order Item Name (Text) — or Auto Number if you prefer.
+	3.	Important: We will create a Master-Detail to Order so totals are rolled up reliably.
+	4.	Save.
+
+Add fields to Order Item
+
+In Order Item → Fields & Relationships → New:
+	•	Order (Master-Detail Relationship) → Related to Order.
+	•	This will create the parent-child. Label: Order.
+	•	Product Name (Text 255)
+	•	Unit Price (Currency, 2 decimals)
+	•	Quantity (Number, 0 decimals or allow decimals if needed)
+	•	Line Total (Formula, Currency): Unit_Price_c * Quantity_c (set formula return currency).
+	•	Notes (Long Text Area)
+
+Save.
+
+Important: Make sure Master-Detail behavior sets sharing/visibility as you expect (in master-detail child inherits sharing from parent).
+
+⸻
+
+2 — Page Layouts, Compact Layouts, and Tabs
+
+Create Tabs
+
+Setup → Tabs → New (Custom Object Tabs)
+	•	Create tab for Order (choose an icon) and Order Item.
+	•	Save.
+
+Create Lightning App (Demo App)
+
+Setup → App Manager → New Lightning App:
+	•	App Name: Demo Order Management
+	•	Add the Orders and Order Items tabs, Accounts, Contacts, Reports, Dashboards.
+	•	Utility bar optional: Notes, Recent items.
+
+Edit Page Layouts
+
+Object Manager → Order → Page Layouts:
+	•	Add fields: Order Number, Account, Order Date, Status, Order Total (read-only), Description.
+	•	Add related list: Order Items (show Product Name, Quantity, Unit Price, Line Total).
+	•	Save.
+
+Order Item page layout: include Order (parent), Product Name, Unit Price, Quantity, Line Total.
+
+Lightning Record Pages
+
+Open a sample Order record (after creating one) → click the gear icon → Edit Page → customize as needed (add Related Lists, Reports component, Path component).
+
+3 — Sample Data (create records)
+
+Go to the App Demo Order Management → Accounts tab → New:
+	•	Account 1: Name: Acme Corp (Owner: yourself)
+	•	Account 2: Name: Blue Retail Ltd
+
+Contacts: create 1 contact per account (optional).
+
+Create an Order:
+	•	Orders → New:
+	•	Account: Acme Corp
+	•	Order Date: today
+	•	Status: Draft
+	•	Save → record shows Order Number ORD-0001
+
+Create Order Items:
+	•	On Order ORD-0001 → Related → Order Items → New:
+	•	Product Name: Widget A
+	•	Unit Price: 1000
+	•	Quantity: 2
+	•	Save → Line Total should show 2000 (via formula).
+
+Add second Order Item:
+	•	Product Name: Widget B
+	•	Unit Price: 500
+	•	Quantity: 1
+	•	Save → Line Total 500.
+
+After automation runs (we’ll build Flow next), Order Total should become 2500.
+
+4 — Validation Rules
+
+Object Manager → Order Item → Validation Rules → New
+
+A. Prevent zero/negative quantity
+
+Rule Name: Qty_Positive
+Error Condition Formula:Quantity__c <= 0
+Error Message: Quantity must be greater than 0.
+Error Location: Field: Quantity__c
+
+B. Ensure Order has Account (optional)
+
+Object Manager → Order → Validation Rules → New
+Rule Name: Order_Account_Required
+Error Condition Formula:ISBLANK(AccountId)
+Error Message: Order must be associated with an Account.
+
+⸻
+
+5 — Automations (Flows) — roll-up and email
+
+We’ll use Flows (Lightning Flow) — preferred over Process Builder.
+
+Open Setup → Flow → New Flow → Choose Record-Triggered Flow (for Order Item).
+
+Flow A — Roll-up Order Total when Order Item is created/updated/deleted
+
+We need to handle Create, Update, and Delete. There are two approaches:
+	•	Option 1 (easier): After-save record-triggered flow on Order Item that recalculates total by querying all Order Items for parent Order.
+	•	Option 2 (advanced): Use Declarative Lookup Rollup Summary (DLRS) package; but we’ll do Option 1.
+
+Create Record-Triggered Flow (Order Item — after-save)
+	1.	Flow Type: Record-Triggered Flow.
+	2.	Object: Order Item (Order_Item__c).
+	3.	Trigger: When: A record is created or updated. Run: After the record is saved.
+	4.	Entry Conditions: None (we want to run whenever quantity/price changes).
+	5.	Optimize For: Actions and Related Records (default).
+	6.	Click Done.
+
+Flow logic:
+	•	Get Records element:
+	•	Get all Order_Item_c records where Orderc = {!$Record.Order_c}.
+	•	Sort not required. Get All Records.
+	•	Assignment or Loop: Loop through the order item records and sum Line_Total_c (or compute Unit_Pricec * Quantity_c).
+	•	Create variable varTotal default 0 (Number).
+	•	In loop: varTotal = varTotal + CurrentItem.Line_Total__c.
+	•	After loop, Update Records:
+	•	Update the parent Order record where Id = {!$Record.Order_c} and set Order_Total_c = varTotal.
+	•	Save & Activate flow.
+
+Note (Delete case): After-delete flows are available. To cover deletions, create a second Record-Triggered Flow with trigger A record is deleted (before-save isn’t allowed for delete), that uses the $Record_Prior.Orderc? Actually for deletes, set object Order_Itemc trigger A record is deleted (after delete) and then query remaining Order Items for the parent Order (Order Id available in $Record.Order_c in after-delete) and recompute total. Create that as well.
+
+(If this is too much for now, you can handle deletes manually or create a scheduled flow to reconcile totals nightly.)
+
+Flow B — Email when Order Status becomes Confirmed
+
+Create Record-Triggered Flow on Order (Order__c).
+	1.	Trigger: When a record is updated.
+	2.	Entry Condition: Status__c Equals Confirmed.
+	3.	Configure Start: Run the flow After the record is saved and set it to Only run when a record is updated and meets the condition requirements (so it triggers only when changed to Confirmed).
+	4.	Actions: Send Email action or create Email Alert + Action. Simpler: Use Send Email core action:
+	•	To: Account Owner’s Email: You can Get Records to fetch the Account (Get Account where Id = {!$Record.Account__c}) and then use Account.Owner.Email or directly use {!$Record.Account__r.Owner.Email} if reference available.
+	•	Subject: Order {!$Record.Order_Number__c} Confirmed
+	•	Body: Include Order number, total, link to record: https://<yourdomain>.lightning.force.com/{!$Record.Id} — avoid hardcoding domain; you can include the record id and the user will open it in Salesforce.
+	5.	Save & Activate.
+
+⸻
+
+6 — Path component (Order process visualization)
+	1.	Go to Object Manager → Order → Fields & Relationships → Status__c (picklist must already exist).
+	2.	Setup → Object Manager → Order → Lightning Record Pages → Edit the page → Add Path component and select Status__c for guidance with steps: Draft, Confirmed, Shipped, Closed.
+	3.	For each stage, add guidance text for users (e.g., Draft: “Add items and save order”; Confirmed: “Send confirmation email — automation sends it automatically”).
+
+⸻
+
+7 — List Views, Reports, Dashboards
+
+List Views
+	•	Orders tab → Create New View: My Open Orders filter: Status not equals Closed.
+	•	Create High Value Orders view: Order_Total__c >= 10000.
+
+Reports
+
+Create a Report:
+	•	Type: Orders with Order Items (or custom report type Orders with Order Items). If not available, create a custom report type: Primary Object: Order, Related Object: Order Item (A to many).
+	•	Report 1: Orders by Status — Group by Status, sum Order Total.
+	•	Report 2: Top Accounts by Order Value — Group by Account, sum Order Total, sort desc.
+
+Dashboard
+	•	Create Dashboard OMS Overview:
+	•	Component 1: Donut chart for Orders by Status (use Orders by Status report).
+	•	Component 2: Bar chart: Top Accounts by Order Value.
+	•	Component 3: Metric: Total Orders Value (SUM of Order Total).
+	•	Add to App or share.
+
+⸻
+
+8 — Demo script (step-by-step with expected results)
+
+Follow these steps in sequence; read the “Expected” text after each action.
+
+Demo Setup (before starting)
+	•	Open the Demo Order Management app you created.
+
+Step 1 — Show accounts
+	•	Action: Click Accounts tab → open Acme Corp.
+	•	Expected: Account detail page appears.
+
+Step 2 — Create a new order
+	•	Action: Click Orders → New → fill:
+	•	Account: Acme Corp
+	•	Order Date: today
+	•	Status: Draft
+	•	Save.
+	•	Expected: Order record created with Order Number ORD-0001 and Order Total 0 (before items). You can mention the number.
+
+Step 3 — Add first Order Item
+	•	Action: On Order page → Related → New Order Item:
+	•	Product Name: Widget A, Unit Price: 1000, Quantity: 2. Save.
+	•	Expected: Order Item is saved. Line Total shows 2000. After Flow runs, Order Total updates to 2000 (may be immediate in after-save flow).
+
+Step 4 — Add second Order Item
+	•	Action: Add second item: Widget B, Unit Price 500, Quantity 1. Save.
+	•	Expected: New line total 500. Order Total becomes 2500.
+
+Step 5 — Try validation
+	•	Action: Create an Order Item with Quantity = 0.
+	•	Expected: Validation rule blocks it and shows message Quantity must be greater than 0.
+
+Step 6 — Confirm the order and watch email
+	•	Action: Edit the Order → set Status to Confirmed → Save.
+	•	Expected: Flow runs and sends an email to Account owner (or the specified recipient). Also Path component will show stage change. Show email sent in your email client or in Activity History (if you log/send via Email Alert).
+
+Step 7 — Show reports
+	•	Action: Go to Reports → open Orders by Status.
+	•	Expected: You see Draft or Confirmed grouped counts and totals, Order Total aggregated as expected.
+
+Step 8 — Dashboard
+	•	Action: Open Dashboards → OMS Overview.
+	•	Expected: Donut chart and bar chart reflect the order totals and account ranks.
+
+⸻
+
+9 — Extra polish & suggestions (optional)
+	•	Add Picklist for Payment Terms, Shipping Method.
+	•	Add Shipping Address fields on Order or leverage Account Address.
+	•	Create Approval Process if some orders must be manager-approved before Confirmed.
+	•	Use Lightning Flow Screen Flow to create an Order + multiple Order Items in a guided screen flow (nice for demos).
+	•	Add Email Templates for the confirmation email (setup → Email Templates) and reference in the Flow for consistent branding.
+	•	For better roll-ups use the Declarative Lookup Rollup Summaries (DLRS) app if your org needs complex rollups.
+	•	Add Automation to adjust Inventory (if you track inventory) — requires Product & Inventory object.
+
+⸻
+
+10 — Troubleshooting tips (common issues)
+	•	If Order Total doesn’t update: confirm Flow is Active, running After Save, and that the Get Records query uses correct Order Id.
+	•	If email not sent: check that recipient email exists and Org Email Deliverability is set to All email (Setup → Email → Deliverability).
+	•	If picklist values missing on page: add the field to the layout & save.
+	•	For delete handling of Order Items, create a separate Record-Triggered Flow on delete to recalc totals.
+
+⸻
+
+11 — Ready-to-copy pieces (Formulas & Examples)
+
+Line Total formula (Order Item)
+
+Field Type: Formula (Currency)
+Formula:Unit_Price_c * Quantity_c
+Validation rule for Quantity (Order Item)
+
+Formula:Quantity__c <= 0
+Error: Quantity must be greater than 0.
+
+Validation rule for Order must have Account
+
+Formula:ISBLANK(AccountId)
+12 — Final checklist before demo
+	•	Orders and Order Items tabs visible in the App.
+	•	At least one Account with sample Order(s) and Order Item(s).
+	•	Roll-up Flow activated (create/update) and delete-case flow if desired.
+	•	Email Flow activated and Email Deliverability set to All.
+	•	Reports & Dashboard created and accessible.
+	•	Path component is visible on Order record page.
